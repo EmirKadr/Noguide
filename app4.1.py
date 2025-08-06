@@ -241,4 +241,4 @@ with gr.Blocks() as demo:
         query2.change(fn=search_word_doc, inputs=query2, outputs=output2)
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)))
