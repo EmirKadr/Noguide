@@ -4,7 +4,6 @@ from docx import Document
 import fitz
 import base64
 import re
-import html
 from io import BytesIO
 from rapidfuzz import fuzz
 from pygments import highlight
@@ -237,8 +236,8 @@ with gr.Blocks() as demo:
     with gr.Tab("Sök i Bibliotek.docx"):
         query2 = gr.Textbox(label="🔍 Sök i Bibliotek.docx", placeholder="Ex: lager, capabilities, brandfarligt")
         output2 = gr.HTML()
-
         query2.change(fn=search_word_doc, inputs=query2, outputs=output2)
 
 if __name__ == "__main__":
-    demo.launch()
+    import os
+    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)))
