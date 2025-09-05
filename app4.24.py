@@ -2,6 +2,7 @@ import os
 import re
 import base64
 import html
+import socket
 
 import gradio as gr
 
@@ -86,8 +87,7 @@ def search_documents(query, visible_count=5):
         if score > 0: results.append((doc, score, filename_match))
     results.sort(key=lambda x: (x[1], x[2]), reverse=True)
 
-    html_output = ""
-    shown = 0
+    html_output, shown = "", 0
     for doc, score, _ in results:
         if shown >= visible_count:
             break
@@ -161,8 +161,7 @@ def search_word_doc(query, visible_count=5):
         if score > 0: results.append((section, score))
     results.sort(key=lambda x: x[1], reverse=True)
 
-    html_output = ""
-    shown = 0
+    html_output, shown = "", 0
     formatter = HtmlFormatter(style="friendly", noclasses=True)
 
     for section, score in results:
@@ -214,14 +213,31 @@ def render_markdown_section_to_html(section_text):
     in_code, code_lang, code_buf = False, "", []
 
     def flush_code():
-        if not code_buf: return ""
+        if not code_buf: 
+            return ""
         code_str = "\n".join(code_buf)
+        lang = (code_lang or "").lower()
+        # Robust lexer-val: validera JSON; heuristik för YAML; fallback till TextLexer
         try:
-            if code_lang:
-                lexer = lexers.get_lexer_by_name(code_lang, stripall=False)
+            if lang == "json":
+                import json
+                json.loads(code_str)  # validera JSON; annars faller vi ner till except
+                lexer = lexers.get_lexer_by_name("json", stripall=False)
+            elif lang in ("yaml", "yml"):
+                # Om blocket innehåller uppenbara klamrar på separata rader -> troligen inte YAML
+                if re.search(r"(^|\n)\s*[{}]\s*$", code_str):
+                    raise ValueError("not yaml-like")
+                lexer = lexers.get_lexer_by_name("yaml", stripall=False)
+            elif lang:
+                lexer = lexers.get_lexer_by_name(lang, stripall=False)
             else:
                 if code_str.lstrip().startswith("{"):
-                    lexer = JsonLexer()
+                    try:
+                        import json
+                        json.loads(code_str)
+                        lexer = JsonLexer()
+                    except Exception:
+                        lexer = TextLexer()
                 elif "SELECT" in code_str.upper():
                     lexer = SqlLexer()
                 else:
@@ -234,19 +250,26 @@ def render_markdown_section_to_html(section_text):
         s = raw.strip()
         if s.startswith("```") and not in_code:
             in_code, code_lang, code_buf = True, s.strip("`").strip(), []
-            if code_lang.startswith("```"): code_lang = code_lang[3:].strip()
+            if code_lang.startswith("```"): 
+                code_lang = code_lang[3:].strip()
             continue
         if s.startswith("```") and in_code:
-            out.append(flush_code()); in_code, code_lang, code_buf = False, "", []; continue
-        if in_code: code_buf.append(raw)
-        else: out.append(html.escape(raw) + "<br>")
-    if in_code: out.append(flush_code())
+            out.append(flush_code())
+            in_code, code_lang, code_buf = False, "", []
+            continue
+        if in_code:
+            code_buf.append(raw)
+        else:
+            out.append(html.escape(raw) + "<br>")
+    if in_code:
+        out.append(flush_code())
     return "".join(out)
 
 developer_md_path = os.path.join(BASE_DIR, "quickSearch", "Developer.md")
 
 def load_developer_sections_fresh():
-    if not os.path.exists(developer_md_path): return []
+    if not os.path.exists(developer_md_path): 
+        return []
     with open(developer_md_path, "r", encoding="utf-8") as f:
         return parse_markdown_sections(f.read())
 
@@ -263,8 +286,7 @@ def search_developer_doc(query, visible_count=5):
         if score > 0: results.append((sec, score))
     results.sort(key=lambda x: x[1], reverse=True)
 
-    html_output = ""
-    shown = 0
+    html_output, shown = "", 0
     for sec, score in results:
         if shown >= visible_count: break
         highlighted_heading = re.sub(f"({re.escape(query)})", r"<mark>\1</mark>", sec['heading'], flags=re.IGNORECASE)
@@ -291,7 +313,7 @@ def search_developer_doc(query, visible_count=5):
 #          UI & CSS
 # =========================
 custom_css = """
-/* Gemensam look för preview-rutor i Allmänt & Developer (med details.result) */
+/* Gemensam look för preview i Allmänt & Developer (med details.result) */
 details.result > summary .preview {
   display: block;
   background:#f6f6f6;
@@ -315,7 +337,7 @@ span.toggle { font-weight: 600; }
 """
 
 with gr.Blocks(css=custom_css) as demo:
-    gr.Markdown("# 📚 NoWaste Dokumentbibliotek")
+    gr.Markdown("**NoWaste Dokumentbibliotek – v4.24**")
 
     # --- Dokument (ALLT synligt, ingen details) ---
     with gr.Tab("Dokument"):
@@ -359,5 +381,27 @@ with gr.Blocks(css=custom_css) as demo:
         q3.change(fn=search_developer_doc, inputs=[q3, vis3], outputs=[o3, more3])
         more3.click(fn=more_dev, inputs=[q3, vis3], outputs=[o3, more3, vis3])
 
+# =========================
+#   Entrypoint – Render & lokalt
+# =========================
 if __name__ == "__main__":
-    demo.launch()
+    def first_free_port(start=7860, tries=20):
+        p = start
+        for _ in range(tries):
+            with socket.socket() as s:
+                try:
+                    s.bind(("127.0.0.1", p))
+                    return p
+                except OSError:
+                    p += 1
+        return start
+
+    port_env = os.environ.get("PORT")  # Render sätter denna
+    if port_env:
+        port = int(port_env)
+        print(f"Starting Gradio on 0.0.0.0:{port}")
+        demo.launch(server_name="0.0.0.0", server_port=port)
+    else:
+        port = first_free_port(7860)
+        print(f"Running locally on http://127.0.0.1:{port}")
+        demo.launch(server_name="127.0.0.1", server_port=port)
